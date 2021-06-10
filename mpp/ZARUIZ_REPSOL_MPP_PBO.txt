@@ -1,0 +1,69 @@
+*----------------------------------------------------------------------*
+***INCLUDE ZARUIZ_REPSOL_MPP_STATUS_01O01.
+*----------------------------------------------------------------------*
+*&---------------------------------------------------------------------*
+*& Module STATUS_0100 OUTPUT
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+
+
+MODULE STATUS_0100 OUTPUT.
+ SET PF-STATUS 'BARRA_ESTADO_0100'.
+ SET TITLEBAR 'TITLE01'.
+ENDMODULE.
+
+
+MODULE STATUS_0102 OUTPUT.
+ SET PF-STATUS 'BARRA_ESTADO_0102'.
+ SET TITLEBAR 'TITLE02'.
+
+* TABLES ZARM_GSD_GENERAL.
+
+*&---------------------------------------
+*   VALOR INICIAL ID REGISTRO
+*&---------------------------------------
+  ZARM_GSD_GENERAL-ID_REGISTRO = '$'.
+
+
+
+*&---------------------------------------
+*   VALOR POR DEFECTO MODALIDAD
+*&---------------------------------------
+   IF ZARM_GSD_GENERAL-MODALIDAD = ''.
+     ZARM_GSD_GENERAL-MODALIDAD = 'SM'.
+   ENDIF.
+
+
+*&---------------------------------------
+*   VALOR POR DEFECTO ABONO MANUAL
+*&---------------------------------------
+  ZARM_GSD_GENERAL-ABONO_MAN = 'X'.
+
+
+**&---------------------------------------
+**   VALOR POR DEFECTO MANDANTE
+**&---------------------------------------
+  ZARM_GSD_GENERAL-MANDT = 100.
+
+ENDMODULE.
+
+*&SPWIZARD: OUTPUT MODULE FOR TC 'TC_DETALLE2'. DO NOT CHANGE THIS LINE!
+*&SPWIZARD: UPDATE LINES FOR EQUIVALENT SCROLLBAR
+MODULE TC_DETALLE2_CHANGE_TC_ATTR OUTPUT.
+  DESCRIBE TABLE IT_DETALLANDO LINES TC_DETALLE2-lines.
+
+
+  IF IT_DETALLANDO[] IS INITIAL.
+    CLEAR: IT_DETALLANDO.
+    APPEND WA_DETALLANDO TO IT_DETALLANDO.
+  ENDIF.
+
+
+ENDMODULE.
+
+*&SPWIZARD: OUTPUT MODULE FOR TC 'TC_DETALLE2'. DO NOT CHANGE THIS LINE!
+*&SPWIZARD: GET LINES OF TABLECONTROL
+MODULE TC_DETALLE2_GET_LINES OUTPUT.
+  G_TC_DETALLE2_LINES = SY-LOOPC.
+ENDMODULE.

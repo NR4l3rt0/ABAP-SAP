@@ -1,0 +1,253 @@
+*&---------------------------------------------------------------------*
+*& Report ZARM_GSD_GENERA_FICHERO
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+REPORT ZARM_GSD_GENERA_FICHERO.
+
+TABLES: ZARM_GSD_GENERAL,
+        ZARM_GSD_DETALLE,
+        ZARM_GSD_PRODUCT,
+        ZARUIZ_GSD_CLIE,
+        ZARM_GSD_COLAB.
+
+CONSTANTS: C_CR TYPE STRING VALUE 'CR',   " En caso de contrato renting
+           C_FC TYPE STRING VALUE 'FC'.   " En caso de factura de compra
+
+DATA: area(2)               TYPE C VALUE '99',
+      servicio_iva(11)      TYPE C VALUE '00000030027',
+      servicio_can(11)      TYPE C VALUE 'INC_COM_CAN',
+      centro_coste(10)      TYPE C VALUE '0000010096',
+      actividad(6)          TYPE C VALUE '',
+      descripcion2(35)      TYPE C.
+
+DATA: linea(150) TYPE C,
+      nombre_archivo TYPE RLGRAP-FILENAME VALUE '/usr/sap/tmp/gasodomesticos_practicas.txt'.
+
+
+DATA: gv_servicio_general(11) TYPE C,
+      gv_total_incentivos TYPE ZARM_GSD_DETALLE-INCENTIVO_TOTAL,
+      gv_total_incentivos_string TYPE STRING.
+
+TYPES: BEGIN OF t_union,
+      cod_colab          TYPE ZARM_GSD_COLAB-COD_COLAB,
+      cod_cliente        TYPE ZARUIZ_GSD_CLIE-COD_CLIENTE,
+      localidad          TYPE ZARUIZ_GSD_CLIE-LOCALIDAD,
+      id_registro        TYPE ZARM_GSD_GENERAL-ID_REGISTRO,
+      referencia         TYPE ZARM_GSD_GENERAL-REFERENCIA,
+      fecha_documento    TYPE ZARM_GSD_GENERAL-FECHA_DOCUMENTO,
+      fecha_creacion     TYPE ZARM_GSD_GENERAL-FECHA_CREACION,
+      fecha_gen          TYPE ZARM_GSD_GENERAL-FECHA_GEN,
+      producto           TYPE ZARM_GSD_DETALLE-PRODUCTO,
+      tipo_aparato       TYPE ZARM_GSD_DETALLE-TIPO_APARATO,
+      cantidad           TYPE ZARM_GSD_DETALLE-CANTIDAD,
+      incentivo_total    TYPE ZARM_GSD_DETALLE-INCENTIVO_TOTAL,
+      incentivo_unitario TYPE ZARM_GSD_DETALLE-INCENTIVO_UNITARIO,
+  END OF t_union.
+
+
+DATA: it_union TYPE STANDARD TABLE OF t_union,
+      wa_union TYPE t_union.
+
+TYPES: BEGIN OF t_seleccion,
+        codigo_producto        TYPE ZARM_GSD_PRODUCT-CODIGO_PRODUCTO,
+        incentivo_unitario   TYPE ZARM_GSD_PRODUCT-INCENTIVO_UNITARIO,
+       END OF t_seleccion.
+
+DATA: it_seleccion TYPE STANDARD TABLE OF t_seleccion,
+      wa_seleccion TYPE t_seleccion.
+
+
+TYPES: BEGIN OF t_id_registros,
+        id_registro TYPE ZARM_GSD_GENERAL-ID_REGISTRO,
+       END OF t_id_registros.
+
+DATA: it_id_registros TYPE STANDARD TABLE OF t_id_registros,
+      wa_id_registros TYPE t_id_registros.
+
+
+START-OF-SELECTION.
+
+
+      SELECT colab~COD_COLAB
+             clie~COD_CLIENTE
+             clie~LOCALIDAD
+             gene~ID_REGISTRO
+             gene~REFERENCIA
+             gene~FECHA_DOCUMENTO
+             gene~FECHA_GEN
+             gene~FECHA_CREACION
+             deta~PRODUCTO
+             deta~INCENTIVO_UNITARIO
+             deta~CANTIDAD
+             deta~TIPO_APARATO
+
+        INTO CORRESPONDING FIELDS OF TABLE it_union
+        FROM          ZARM_GSD_GENERAL AS gene
+         INNER JOIN   ZARM_GSD_COLAB   AS colab
+            ON colab~COD_COLAB EQ gene~COD_COLAB
+
+         INNER JOIN   ZARUIZ_GSD_CLIE  AS clie
+            ON clie~COD_CLIENTE EQ gene~COD_CLIENTE
+
+         INNER JOIN   ZARM_GSD_DETALLE AS deta
+            ON deta~ID_REGISTRO_GENERAL_CP EQ gene~ID_REGISTRO
+
+           WHERE gene~FECHA_GEN EQ '00000000'.
+
+
+
+
+      IF it_union IS NOT INITIAL.
+
+
+        SELECT DISTINCT CODIGO_PRODUCTO INCENTIVO_UNITARIO
+          FROM ZARM_GSD_PRODUCT
+          INTO TABLE it_seleccion
+            FOR ALL ENTRIES IN it_union
+              WHERE CODIGO_PRODUCTO = it_union-producto.
+
+
+        LOOP AT it_union INTO wa_union.
+
+          LOOP AT it_seleccion INTO wa_seleccion.   " Solución no efectiva O(n^2), pero se toma por ser pocos campos y lista de registros registros distintos
+
+            " Se juega con la idea de que es distinto producto, igual producto igual precio, igual producto distino precio.
+            IF    wa_union-producto           EQ wa_seleccion-codigo_producto
+              AND wa_union-incentivo_unitario NE wa_seleccion-incentivo_unitario .
+
+                 wa_union-incentivo_unitario = wa_seleccion-incentivo_unitario.
+                 wa_union-incentivo_total = wa_union-incentivo_unitario * wa_union-cantidad.
+                 gv_total_incentivos = gv_total_incentivos + wa_union-incentivo_total.
+
+                 UPDATE ZARM_GSD_DETALLE SET INCENTIVO_UNITARIO = wa_union-incentivo_unitario
+                                             INCENTIVO_TOTAL    = wa_union-incentivo_total
+                    WHERE ID_REGISTRO_GENERAL_CP = wa_union-ID_REGISTRO
+                      AND TIPO_APARATO           = wa_union-TIPO_APARATO.
+
+
+              IF wa_union-LOCALIDAD EQ 'CANARIAS'.
+                 gv_servicio_general = servicio_can.
+              ELSE.
+                 gv_servicio_general = servicio_iva.
+              ENDIF.
+
+
+              gv_total_incentivos_string = gv_total_incentivos .                              " casting cutre
+
+              CONCATENATE
+                   wa_union-cod_colab
+                   area
+                   gv_servicio_general
+                   wa_union-fecha_creacion
+                   wa_union-cantidad        " productos
+                   wa_union-referencia
+                   wa_union-fecha_documento
+                   centro_coste
+                   actividad
+                   gv_total_incentivos_string
+
+                   INTO linea
+                   SEPARATED BY space
+                   RESPECTING BLANKS.
+
+              OPEN DATASET nombre_archivo FOR APPENDING IN TEXT MODE ENCODING UTF-8.
+
+                IF SY-SUBRC EQ 0.
+
+                  TRANSFER linea TO nombre_archivo.
+
+
+                  UPDATE ZARM_GSD_GENERAL SET FECHA_MOD    = SY-DATUM
+                                              FECHA_GEN    = SY-DATUM
+                                              USUARIO_MOD  = SY-UNAME
+                     WHERE ID_REGISTRO = wa_union-ID_REGISTRO.
+
+                ELSE.
+                  MESSAGE 'ERROR AL ABRIR' TYPE 'I'.
+                ENDIF.
+
+
+              CLOSE DATASET nombre_archivo.
+
+
+
+
+            ELSEIF wa_union-producto           EQ wa_seleccion-codigo_producto
+               AND wa_union-incentivo_unitario EQ wa_seleccion-incentivo_unitario .
+
+
+                wa_union-incentivo_total = wa_union-incentivo_unitario * wa_union-cantidad.
+                gv_total_incentivos = gv_total_incentivos + wa_union-incentivo_total.
+
+                UPDATE ZARM_GSD_DETALLE SET INCENTIVO_UNITARIO = wa_union-incentivo_unitario
+                              INCENTIVO_TOTAL    = wa_union-incentivo_total
+                    WHERE ID_REGISTRO_GENERAL_CP = wa_union-ID_REGISTRO
+                      AND TIPO_APARATO           = wa_union-TIPO_APARATO.
+
+
+
+                IF wa_union-LOCALIDAD EQ 'CANARIAS'.
+                   gv_servicio_general = servicio_can.
+                ELSE.
+                   gv_servicio_general = servicio_iva.
+                ENDIF.
+
+
+                gv_total_incentivos_string = gv_total_incentivos .                              " casting cutre
+
+                CONCATENATE
+                     wa_union-cod_colab
+                     area
+                     gv_servicio_general
+                     wa_union-fecha_creacion
+                     wa_union-cantidad        " productos
+                     wa_union-referencia
+                     wa_union-fecha_documento
+                     centro_coste
+                     actividad
+                     gv_total_incentivos_string
+
+                     INTO linea
+                     SEPARATED BY space
+                     RESPECTING BLANKS.
+
+                OPEN DATASET nombre_archivo FOR APPENDING IN TEXT MODE ENCODING UTF-8.
+
+                  IF SY-SUBRC EQ 0.
+
+                    TRANSFER linea TO nombre_archivo.
+
+
+                    UPDATE ZARM_GSD_GENERAL SET FECHA_MOD    = SY-DATUM
+                                                FECHA_GEN    = SY-DATUM
+                                                USUARIO_MOD  = SY-UNAME
+                       WHERE ID_REGISTRO = wa_union-ID_REGISTRO.
+
+                  ELSE.
+                    MESSAGE 'ERROR AL ABRIR' TYPE 'I'.
+                  ENDIF.
+
+
+                CLOSE DATASET nombre_archivo.
+
+
+            ELSE.
+
+              CONTINUE.
+
+            ENDIF.
+
+          ENDLOOP.
+      ENDLOOP.
+
+   ELSEIF it_union IS INITIAL.
+     "DELETE DATASET nombre_archivo.
+     WRITE: 'VACIO'.
+
+   ELSE.
+     WRITE: 'OTRO ERROR'.
+
+   ENDIF.
+
+  MESSAGE Text-001 TYPE 'I'.

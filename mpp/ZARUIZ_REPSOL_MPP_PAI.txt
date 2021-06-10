@@ -1,0 +1,282 @@
+*----------------------------------------------------------------------*
+***INCLUDE ZARUIZ_REPSOL_MPP_USER_COMMI01.
+*----------------------------------------------------------------------*
+*&---------------------------------------------------------------------*
+*&      Module  USER_COMMAND_0100  INPUT
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+
+
+MODULE USER_COMMAND_0100 INPUT.
+
+*&---------------------------------------------------------------- &
+* | Compara el valor pasado y si es CR va a la pantalla siguiente. |
+* | Si no, sólo manda mensaje informativo y se queda en la página. |
+*&---------------------------------------------------------------- &
+  CASE SY-UCOMM.
+    WHEN 'BACK'.
+      LEAVE TO SCREEN 0.      " LLAMA A SCREEN PREVIO
+    WHEN 'CANCEL' OR 'EXIT'.
+      LEAVE PROGRAM.
+
+    WHEN 'SELECCION_USER'.
+      SELECT SINGLE TIPO_DOCUMENTO
+        FROM ZARM_GSD_GENERAL
+        INTO CORRESPONDING FIELDS OF ZARM_GSD_GENERAL
+          WHERE TIPO_DOCUMENTO = ZARM_GSD_GENERAL-TIPO_DOCUMENTO.
+
+    WHEN 'EJECUTAR'.
+      IF ZARM_GSD_GENERAL-TIPO_DOCUMENTO EQ C_CR.
+        CALL SCREEN 0102.                                 " Llamada a SCREEN 0102
+      ELSE.
+        MESSAGE ZARM_GSD_GENERAL-TIPO_DOCUMENTO TYPE 'I'.
+      ENDIF.
+
+    WHEN 'GENERAR'.
+
+      SUBMIT ZARM_GSD_GENERA_FICHERO.
+
+    WHEN OTHERS.
+
+  ENDCASE.
+ENDMODULE.
+
+
+
+MODULE USER_COMMAND_0102 INPUT.
+
+  CASE SY-UCOMM.
+    WHEN 'BACK'.
+      LEAVE TO SCREEN 0100.       " LLAMA A SCREEN CONCRETO
+    WHEN 'CANCEL' OR 'EXIT'.
+      LEAVE PROGRAM.
+
+    WHEN 'BORRAR'.
+
+      SELECT SINGLE ID_REGISTRO
+        FROM ZARM_GSD_GENERAL
+          INTO CORRESPONDING FIELDS OF ZARM_GSD_GENERAL
+          WHERE ID_REGISTRO = ZARM_GSD_GENERAL-ID_REGISTRO.
+
+        IF SY-SUBRC EQ 0.
+          DELETE ZARM_GSD_GENERAL FROM ZARM_GSD_GENERAL.
+          MESSAGE 'REGISTRO BORRADO' TYPE 'I'.
+        ELSE.
+          MESSAGE 'REGISTRO NO EXISTENTE' TYPE 'I'.
+        ENDIF.
+
+
+    WHEN 'GRABAR'.
+
+
+*&------------------------------------------------------------------------------
+*                 CALCULA DURACIÓN CONTRATO
+*&------------------------------------------------------------------------------
+      PERFORM calcular_NMC USING ZARM_GSD_GENERAL-FECHA_INI_CONTRATO
+                                 ZARM_GSD_GENERAL-FECHA_FIN_CONTRATO
+                           CHANGING ZARM_GSD_GENERAL-DUR_CONTRATO.
+
+
+*&------------------------------------------------------------------------------
+*                 CHEQUEA DURACIÓN CONTRATO SUFICIENTE
+*&------------------------------------------------------------------------------
+      PERFORM comprobar_dur_contrato USING ZARM_GSD_GENERAL-DUR_CONTRATO
+                                     CHANGING ZARM_GSD_GENERAL-DUR_SUF.
+
+
+
+*&------------------------------------------------------------------------------
+*                 COMPRUEBA SI ES ÚNICO EL CONTRATO
+*&------------------------------------------------------------------------------
+
+
+      PERFORM es_contrato_unico_campanha USING ZARM_GSD_GENERAL-FECHA_DOCUMENTO
+                                               ZARM_GSD_GENERAL-COD_CLIENTE
+                                         CHANGING ZARM_GSD_GENERAL-CONTRATO_UNI.
+
+
+*&------------------------------------------------------------------------------
+*                 COMPRUEBA SI NO SE EXCEDE EL NÚMERO DE DÍAS ENTRE FECHAS
+*&------------------------------------------------------------------------------
+
+
+      PERFORM no_es_plazo_exc_entre_fechas USING ZARM_GSD_GENERAL-FECHA_DOCUMENTO
+                                                 ZARM_GSD_GENERAL-FECHA_GEN
+                                           CHANGING ZARM_GSD_GENERAL-PLAZO_NEXC.
+
+
+
+*&------------------------------------------------------------------------------
+*                 AÑADE VALOR AUTOMÁTICO INCREMENTAL ID_REGISTRO
+*&------------------------------------------------------------------------------
+      PERFORM valor_id_registro CHANGING ZARM_GSD_GENERAL-ID_REGISTRO.
+
+
+
+
+*&------------------------------------------------------------------------------
+*                 GUARDA REGISTRO DETALLE
+*&------------------------------------------------------------------------------
+
+
+      LOOP AT IT_DETALLANDO INTO WA_DETALLANDO.
+
+         ZARM_GSD_DETALLE-MANDT                 = ZARM_GSD_GENERAL-MANDT.
+
+*      &------------------------------------------------------------------------------
+*                       AÑADE VALOR AUTOMÁTICO INCREMENTAL ID_REGISTRO_DETALLE
+*      &------------------------------------------------------------------------------
+        PERFORM valor_id_registro_detalle CHANGING ZARM_GSD_DETALLE-ID_REGISTRO.
+
+        " FIN AÑADE VALOR AUTOMÁTICO INCREMENTAL ID_REGISTRO_DETALLE
+
+
+        ZARM_GSD_DETALLE-ID_REGISTRO_GENERAL_CP = ZARM_GSD_GENERAL-ID_REGISTRO.
+        ZARM_GSD_DETALLE-ID_POSICION            = 'AUTO LOGICA'.
+        ZARM_GSD_DETALLE-PRODUCTO               = WA_DETALLANDO-PRODUCTO.
+        ZARM_GSD_DETALLE-CANTIDAD               = WA_DETALLANDO-CANTIDAD.
+        ZARM_GSD_DETALLE-PRECIO_BASE            = WA_DETALLANDO-PRECIO_BASE.
+
+
+
+
+*      &------------------------------------------------------------------------------
+*                       AÑADE VALORES RELACIONADOS CON LA AYUDA DE BÚSQUEDA
+*      &------------------------------------------------------------------------------
+        PERFORM rellena_info_rel_producto USING ZARM_GSD_DETALLE-PRODUCTO
+                                          CHANGING ZARM_GSD_DETALLE-TIPO_APARATO
+                                                   ZARM_GSD_DETALLE-INCENTIVO_UNITARIO
+                                                   ZARM_GSD_DETALLE-DESCRIPCION.
+
+       " FIN AÑADE VALORES RELACIONADOS CON LA AYUDA DE BÚSQUEDA
+
+
+
+         ZARM_GSD_DETALLE-INCENTIVO_TOTAL       = ZARM_GSD_DETALLE-INCENTIVO_UNITARIO
+                                                             * ZARM_GSD_DETALLE-CANTIDAD.
+
+
+
+*       &------------------------------------------------------------------------------
+*                        COMPRUEBA SI PRODUCTO TIENE PRECIO
+*       &------------------------------------------------------------------------------
+
+         PERFORM contrato_con_importe USING ZARM_GSD_DETALLE-PRODUCTO
+                                             ZARM_GSD_DETALLE-PRECIO_BASE
+                                       CHANGING ZARM_GSD_GENERAL-CONTRATO_CIMP.
+
+        " FIN COMPROBACIÓN SI PRODUCTO TIENE PRECIO
+
+
+
+         ZARM_GSD_DETALLE-PORCENTAJE_IMPOSITIVO = WA_DETALLANDO-PORCENTAJE_IMPOSITIVO.
+         ZARM_GSD_DETALLE-IMPORTE_UNITARIO      = ZARM_GSD_DETALLE-PRECIO_BASE + 1.       " SUPONE IMPUESTO COMO 1
+         ZARM_GSD_DETALLE-TOTAL                 = ZARM_GSD_DETALLE-IMPORTE_UNITARIO
+                                                    * ZARM_GSD_DETALLE-CANTIDAD .
+
+
+
+         MODIFY ZARM_GSD_DETALLE FROM ZARM_GSD_DETALLE.        " INSERCIÓN REGISTRO EN LA TABLA
+
+
+     ENDLOOP.
+
+
+
+
+
+
+
+
+
+*&------------------------------------------------------------------------------
+*                 COMPRUEBA SI CUMPLE CONDICIONES PARA ABONAR AUTOMÁTICAMENTE
+*&------------------------------------------------------------------------------
+*   Obsérvese que en tal caso, se cambia el valor de abono manual a automático
+*&------------------------------------------------------------------------------
+
+      PERFORM es_abono_automatico USING ZARM_GSD_GENERAL-DUR_SUF
+                                        ZARM_GSD_GENERAL-CONTRATO_UNI
+                                        ZARM_GSD_GENERAL-CONTRATO_CIMP
+                                        ZARM_GSD_GENERAL-PLAZO_NEXC
+                                  CHANGING ZARM_GSD_GENERAL-ABONO_AUT
+                                           ZARM_GSD_GENERAL-ABONO_MAN.
+
+
+
+
+
+
+*&------------------------------------------------------------------------------
+*                 GUARDA REGISTRO GENERAL
+*&------------------------------------------------------------------------------
+      ZARM_GSD_GENERAL-FECHA_CREACION = SY-DATUM.
+      ZARM_GSD_GENERAL-HORA_CREACION = SY-UZEIT.
+      ZARM_GSD_GENERAL-USUARIO_CREACION = SY-UNAME.
+
+
+      MODIFY ZARM_GSD_GENERAL FROM ZARM_GSD_GENERAL.
+
+      IF SY-SUBRC EQ 0.
+        MESSAGE Text-001 TYPE 'I'.
+        CLEAR ZARM_GSD_GENERAL.                         " LIMPIA LOS CAMPOS
+        SET SCREEN 0.
+
+      ELSE.
+        MESSAGE Text-002 TYPE 'I'.
+        EXIT.
+      ENDIF.
+
+    WHEN OTHERS.
+
+  ENDCASE.
+
+ENDMODULE.
+
+
+
+
+
+
+*&SPWIZARD: INPUT MODULE FOR TC 'TC_DETALLE2'. DO NOT CHANGE THIS LINE!
+*&SPWIZARD: MODIFY TABLE
+MODULE TC_DETALLE2_MODIFY INPUT.
+
+  MODIFY IT_DETALLANDO
+    FROM WA_DETALLANDO
+    INDEX TC_DETALLE2-CURRENT_LINE.
+ENDMODULE.
+
+*&SPWIZARD: INPUT MODUL FOR TC 'TC_DETALLE2'. DO NOT CHANGE THIS LINE!
+*&SPWIZARD: MARK TABLE
+MODULE TC_DETALLE2_MARK INPUT.
+  DATA: g_TC_DETALLE2_wa2 like line of IT_DETALLANDO.
+    if TC_DETALLE2-line_sel_mode = 1
+    and WA_DETALLANDO-MARK = 'X'.
+     loop at IT_DETALLANDO into g_TC_DETALLE2_wa2
+       where MARK = 'X'.
+       g_TC_DETALLE2_wa2-MARK = ''.
+       modify IT_DETALLANDO
+         from g_TC_DETALLE2_wa2
+         transporting MARK.
+     endloop.
+  endif.
+  MODIFY IT_DETALLANDO
+    FROM WA_DETALLANDO
+    INDEX TC_DETALLE2-CURRENT_LINE
+    TRANSPORTING MARK.
+ENDMODULE.
+
+*&SPWIZARD: INPUT MODULE FOR TC 'TC_DETALLE2'. DO NOT CHANGE THIS LINE!
+*&SPWIZARD: PROCESS USER COMMAND
+MODULE TC_DETALLE2_USER_COMMAND INPUT.
+  OK_CODE = SY-UCOMM.
+  PERFORM USER_OK_TC USING    'TC_DETALLE2'
+                              'IT_DETALLANDO'
+                              'MARK'
+                     CHANGING OK_CODE.
+  SY-UCOMM = OK_CODE.
+
+
+ENDMODULE.

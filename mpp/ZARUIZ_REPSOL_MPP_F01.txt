@@ -1,0 +1,699 @@
+*&---------------------------------------------------------------------*
+*& Include          ZARUIZ_REPSOL_MPP_F01
+*&---------------------------------------------------------------------*
+
+
+*&---------------------------------------
+*   AÑADE VALOR AUTOMÁTICO ID REGISTRO
+*&---------------------------------------
+
+FORM valor_id_registro CHANGING v_id_registro_init
+                           TYPE ZARM_GSD_GENERAL-ID_REGISTRO.
+
+  CALL FUNCTION 'NUMBER_GET_NEXT'
+    EXPORTING
+      NR_RANGE_NR                   = 'CR'
+      OBJECT                        = 'ZARM_IDREG'
+
+   IMPORTING
+     NUMBER                        = v_id_registro_init
+
+   EXCEPTIONS
+     INTERVAL_NOT_FOUND            = 1
+     NUMBER_RANGE_NOT_INTERN       = 2
+     OBJECT_NOT_FOUND              = 3
+     QUANTITY_IS_0                 = 4
+     QUANTITY_IS_NOT_1             = 5
+     INTERVAL_OVERFLOW             = 6
+     BUFFER_OVERFLOW               = 7
+     OTHERS                        = 8.
+
+  IF SY-SUBRC <> 0.
+   MESSAGE Text-004 TYPE 'E'.
+  ELSE.
+   ZARM_GSD_GENERAL-ID_REGISTRO = v_id_registro_init.
+  ENDIF.
+
+ENDFORM.
+
+
+
+*&---------------------------------------------------------------------*
+*& Form VALOR_ID_REGISTRO_DETALLE
+*&---------------------------------------------------------------------*
+*& text
+*&---------------------------------------------------------------------*
+
+FORM VALOR_ID_REGISTRO_DETALLE  CHANGING v_id_registro_init
+                                     TYPE ZARM_GSD_GENERAL-ID_REGISTRO.
+
+
+  CALL FUNCTION 'NUMBER_GET_NEXT'
+    EXPORTING
+      NR_RANGE_NR                   = 'CR'
+      OBJECT                        = 'ZARM_IDDET'
+
+   IMPORTING
+     NUMBER                        = v_id_registro_init
+
+   EXCEPTIONS
+     INTERVAL_NOT_FOUND            = 1
+     NUMBER_RANGE_NOT_INTERN       = 2
+     OBJECT_NOT_FOUND              = 3
+     QUANTITY_IS_0                 = 4
+     QUANTITY_IS_NOT_1             = 5
+     INTERVAL_OVERFLOW             = 6
+     BUFFER_OVERFLOW               = 7
+     OTHERS                        = 8.
+
+  IF SY-SUBRC <> 0.
+   MESSAGE Text-004 TYPE 'E'.
+  ELSE.
+   ZARM_GSD_DETALLE-ID_REGISTRO = v_id_registro_init.
+  ENDIF.
+
+ENDFORM.
+
+
+
+*&---------------------------------------------------------------------*
+*&          CALCULAR NÚMERO MESES DE CONTRATO
+*&---------------------------------------------------------------------*
+
+
+FORM calcular_NMC USING fecha_inicio    TYPE ZARUIZ_FECHA
+                        fecha_fin       TYPE ZARUIZ_FECHA
+                  CHANGING dur_contrato TYPE ZARUIZ_DUR_CONTRATO.
+
+
+  IF fecha_inicio <= fecha_fin.
+
+    CALL FUNCTION 'MONTHS_BETWEEN_TWO_DATES'
+      EXPORTING
+        I_DATUM_BIS         = fecha_inicio
+        I_DATUM_VON         = fecha_fin
+*       I_KZ_INCL_BIS       = ' '
+      IMPORTING
+       E_MONATE            = dur_contrato
+              .
+  ELSE.
+      MESSAGE Text-005 TYPE 'I'.
+      LEAVE TO SCREEN 0102.
+  ENDIF.
+
+ENDFORM.
+
+
+
+*&---------------------------------------------------------------------*
+*&          COMPRUEBA QUE LA DURACIÓN DEL CONTRATO SEA SUFICIENTE
+*&---------------------------------------------------------------------*
+
+FORM comprobar_dur_contrato USING duracion_contrato      TYPE ZARUIZ_DUR_CONTRATO
+                            CHANGING duracion_suficiente TYPE ZARUIZ_DUR_SUF.
+
+  IF duracion_contrato > 3.
+    duracion_suficiente = 'X'.
+  ELSE.
+    MESSAGE Text-003 TYPE 'I'.
+    LEAVE TO SCREEN 0102.
+  ENDIF.
+
+  MESSAGE duracion_suficiente TYPE 'I'.
+
+ENDFORM.
+
+
+
+*&---------------------------------------------------------------------*
+*&          COMPRUEBA SI EXISTE OTRA FECHA EN ESE RANGO
+*&---------------------------------------------------------------------*
+
+* CALL FUNCTION 'TTE_CHK_DTRNG_DATERANGE'.   -> no funciona
+
+FORM es_contrato_unico_campanha USING fecha_contrato    TYPE ZARUIZ_FECHA
+                                      codigo_cliente    TYPE ZARUIZ_CLIENTE_DATA
+                                CHANGING contrato_unico TYPE ZARUIZ_CONT_UNICO.
+
+  TYPES: BEGIN OF t_general,
+          fecha_documento TYPE ZARM_GSD_GENERAL-FECHA_DOCUMENTO,
+          cod_cliente     TYPE ZARM_GSD_GENERAL-COD_CLIENTE,
+         END OF t_general.
+
+  DATA: it_general  TYPE STANDARD TABLE OF t_general,
+        wa_general  TYPE t_general,
+        ld_inferior TYPE DATS,
+        ld_superior TYPE DATS.
+
+  PERFORM calcular_rango USING fecha_contrato
+                         CHANGING ld_inferior
+                                  ld_superior.
+
+
+
+    SELECT FECHA_DOCUMENTO COD_CLIENTE
+      FROM ZARM_GSD_GENERAL
+        INTO TABLE it_general
+        WHERE COD_CLIENTE = codigo_cliente
+          AND FECHA_DOCUMENTO BETWEEN ld_inferior
+                                  AND ld_superior.
+
+
+
+    IF SY-SUBRC EQ 0.
+      MESSAGE CODIGO_CLIENTE TYPE 'I'.
+      MESSAGE Text-006 TYPE 'I'.
+      LEAVE TO SCREEN 0102.
+
+    ELSEIF SY-SUBRC EQ 4.
+      MESSAGE 'MARCAR COMO ÚNICO' TYPE 'I'.   " Mensaje temporal
+      contrato_unico = 'X'.
+
+    ELSE.
+      MESSAGE SY-MSGID TYPE 'I'.              " Informa el id del error
+
+    ENDIF.
+
+
+
+ENDFORM.
+
+
+*&---------------------------------------------------------------------*
+*&          CALCULA EL RANGO
+*&---------------------------------------------------------------------*
+*&     Dada una fecha, se calcula un límite inferior y superior
+*&     relativos a la misma.
+*&---------------------------------------------------------------------*
+
+FORM calcular_rango USING fecha_contrato TYPE ZARUIZ_FECHA
+                    CHANGING ld_inferior TYPE DATS
+                             ld_superior TYPE DATS.
+
+  DATA: lc_tmp_inferior(4) TYPE C VALUE '0901',
+        lc_tmp_superior(4) TYPE C VALUE '0831',
+        lc_mes_check       TYPE I,
+        lc_anho(4)         TYPE C,
+        lc_anho_inf(4)     TYPE C,
+        lc_anho_sup(4)     TYPE C.
+
+  lc_mes_check = fecha_contrato+4(2).         " Coge el mes
+  lc_anho = fecha_contrato(4).                " Coge el año
+
+*&-------------------------------------------------------------------------
+* Calcula los rangos para el caso en que la fecha introducida sea inferior
+* a septiembre.
+*&-------------------------------------------------------------------------
+  IF lc_mes_check < 9.
+    lc_anho_inf = lc_anho - 1.
+    lc_anho_sup = lc_anho.
+    CONCATENATE lc_anho_inf lc_tmp_inferior INTO ld_inferior.
+    CONCATENATE lc_anho_sup lc_tmp_superior INTO ld_superior.
+
+*&-------------------------------------------------------------------------
+* Calcula los rangos para el caso en que la fecha introducida sea a partir
+* de septiembre.
+*&-------------------------------------------------------------------------
+  ELSE.
+    lc_anho_inf = lc_anho.
+    lc_anho_sup = lc_anho + 1.
+    CONCATENATE lc_anho_inf lc_tmp_inferior INTO ld_inferior.
+    CONCATENATE lc_anho_sup lc_tmp_superior INTO ld_superior.
+
+
+  ENDIF.
+
+ENDFORM.
+
+
+
+*&---------------------------------------------------------------------*
+*&       COMPRUEBA SI NO SE EXCEDE EL NÚMERO DE DÍAS ENTRE FECHAS
+*&---------------------------------------------------------------------*
+
+
+FORM no_es_plazo_exc_entre_fechas USING fecha_contrato   TYPE ZARUIZ_FECHA
+                                        fecha_generacion TYPE ZARUIZ_FECHA_GEN
+                                  CHANGING plazo_nexc   TYPE ZARUIZ_PLAZO_NEXC.
+
+  DATA: lv_nro_dias TYPE I VALUE 0.
+
+  IF fecha_generacion IS NOT INITIAL.         " Da la opción de que la fecha de generación no esté establecida
+
+    IF fecha_contrato <= fecha_generacion.
+
+      CALL FUNCTION 'DAYS_BETWEEN_TWO_DATES'
+        EXPORTING
+          I_DATUM_BIS                   = fecha_generacion
+          I_DATUM_VON                   = fecha_contrato
+
+       IMPORTING
+         E_TAGE                        = lv_nro_dias
+
+       EXCEPTIONS
+         DAYS_METHOD_NOT_DEFINED       = 1
+         OTHERS                        = 2
+                .
+
+      IF SY-SUBRC <> 0.
+        MESSAGE Text-008 TYPE 'I'.
+      ENDIF.
+
+
+      IF lv_nro_dias > 60.
+        MESSAGE Text-009 TYPE 'I'.
+
+      ELSE.
+        MESSAGE 'PLAZO NO EXCEDIDO' TYPE 'I'. " MSG TMP
+        plazo_nexc = 'X'.
+
+      ENDIF.
+
+    ELSE.
+        MESSAGE Text-007 TYPE 'I'.
+        LEAVE TO SCREEN 0102.
+    ENDIF.
+
+  ENDIF.
+
+ENDFORM.
+
+
+
+
+*&---------------------------------------------------------------------*
+*&       COMPRUEBA SI SE MARCA PARA ABONO AUTOMÁTICO
+*&---------------------------------------------------------------------*
+
+
+FORM es_abono_automatico USING duracion_suficiente TYPE ZARUIZ_DUR_SUF
+                               contrato_unico      TYPE ZARUIZ_CONT_UNICO
+                               contrato_cimp       TYPE ZARUIZ_CONT_CIMP
+                               plazo_nexc          TYPE ZARUIZ_PLAZO_NEXC
+                         CHANGING abono_auto       TYPE ZARUIZ_MARCA_ABONO_AUT
+                                  abono_manual     TYPE ZARUIZ_ABONO_MAN.
+
+  IF duracion_suficiente  EQ 'X'
+      AND contrato_unico  EQ 'X'
+       AND contrato_cimp  EQ 'X'
+        AND plazo_nexc    EQ 'X'.
+
+    abono_auto   = 'X'.
+    abono_manual = ''.
+
+
+  ELSE.
+
+    MESSAGE Text-010 TYPE 'I'.
+  ENDIF.
+
+ENDFORM.
+
+
+*&---------------------------------------------------------------------*
+*&        Comprueba si se ha definido precio base para cada producto
+*&---------------------------------------------------------------------*
+*&---------------------------------------------------------------------*
+
+FORM contrato_con_importe USING producto_codigo  TYPE ZARM_GSD_DETALLE-PRODUCTO
+                                importe_base     TYPE ZARM_GSD_DETALLE-PRECIO_BASE
+                          CHANGING contrato_cimp TYPE ZARUIZ_CONT_CIMP.
+
+  IF importe_base GT 0
+      AND contrato_cimp NE '?'.
+    contrato_cimp = 'X'.
+    MESSAGE Text-011 TYPE 'I'.
+  ELSE.
+    contrato_cimp = '?'.
+    MESSAGE producto_codigo TYPE 'I'.
+  ENDIF.
+
+
+
+ENDFORM.
+
+
+
+*&---------------------------------------------------------------------*
+*& Form RELLENA_INFO_REL_PRODUCTO
+*&---------------------------------------------------------------------*
+
+FORM RELLENA_INFO_REL_PRODUCTO USING cod_producto
+                               CHANGING tipo_aparato
+                                        incentivo_unitario
+                                        descripcion.
+
+  "TABLES ZARM_GSD_PRODUCT.
+
+  TYPES: BEGIN OF t_producto,
+          codigo_producto    TYPE ZARM_GSD_PRODUCT-CODIGO_PRODUCTO,
+          tipo_aparato       TYPE ZARM_GSD_PRODUCT-TIPO_APARATO,
+          incentivo_unitario TYPE ZARM_GSD_PRODUCT-INCENTIVO_UNITARIO,
+          descripcion        TYPE ZARM_GSD_PRODUCT-DESCRIPCION,
+         END OF t_producto.
+
+  DATA: it_producto TYPE STANDARD TABLE OF t_producto,
+        wa_producto TYPE t_producto.
+
+
+
+  SELECT CODIGO_PRODUCTO
+                TIPO_APARATO
+                INCENTIVO_UNITARIO
+                DESCRIPCION
+    FROM ZARM_GSD_PRODUCT
+    INTO TABLE it_producto
+      WHERE CODIGO_PRODUCTO = cod_producto.
+
+
+  LOOP AT it_producto INTO wa_producto.
+    tipo_aparato       = wa_producto-tipo_aparato.
+    incentivo_unitario = wa_producto-incentivo_unitario.
+    descripcion        = wa_producto-descripcion.
+
+    CLEAR wa_producto.
+
+  ENDLOOP.
+
+
+
+ENDFORM.
+
+
+
+
+
+
+
+
+
+
+
+*----------------------------------------------------------------------*
+*   INCLUDE TABLECONTROL_FORMS                                         *
+*----------------------------------------------------------------------*
+
+*&---------------------------------------------------------------------*
+*&      Form  USER_OK_TC                                               *
+*&---------------------------------------------------------------------*
+ FORM USER_OK_TC USING    P_TC_NAME TYPE DYNFNAM
+                          P_TABLE_NAME
+                          P_MARK_NAME
+                 CHANGING P_OK      LIKE SY-UCOMM.
+
+*&SPWIZARD: BEGIN OF LOCAL DATA----------------------------------------*
+   DATA: L_OK              TYPE SY-UCOMM,
+         L_OFFSET          TYPE I.
+*&SPWIZARD: END OF LOCAL DATA------------------------------------------*
+
+*&SPWIZARD: Table control specific operations                          *
+*&SPWIZARD: evaluate TC name and operations                            *
+   SEARCH P_OK FOR P_TC_NAME.
+   IF SY-SUBRC <> 0.
+     EXIT.
+   ENDIF.
+   L_OFFSET = STRLEN( P_TC_NAME ) + 1.
+   L_OK = P_OK+L_OFFSET.
+*&SPWIZARD: execute general and TC specific operations                 *
+   CASE L_OK.
+     WHEN 'INSR'.                      "insert row
+       PERFORM FCODE_INSERT_ROW USING    P_TC_NAME
+                                         P_TABLE_NAME.
+       CLEAR P_OK.
+
+     WHEN 'DELE'.                      "delete row
+       PERFORM FCODE_DELETE_ROW USING    P_TC_NAME
+                                         P_TABLE_NAME
+                                         P_MARK_NAME.
+       CLEAR P_OK.
+
+     WHEN 'P--' OR                     "top of list
+          'P-'  OR                     "previous page
+          'P+'  OR                     "next page
+          'P++'.                       "bottom of list
+       PERFORM COMPUTE_SCROLLING_IN_TC USING P_TC_NAME
+                                             L_OK.
+       CLEAR P_OK.
+*     WHEN 'L--'.                       "total left
+*       PERFORM FCODE_TOTAL_LEFT USING P_TC_NAME.
+*
+*     WHEN 'L-'.                        "column left
+*       PERFORM FCODE_COLUMN_LEFT USING P_TC_NAME.
+*
+*     WHEN 'R+'.                        "column right
+*       PERFORM FCODE_COLUMN_RIGHT USING P_TC_NAME.
+*
+*     WHEN 'R++'.                       "total right
+*       PERFORM FCODE_TOTAL_RIGHT USING P_TC_NAME.
+*
+     WHEN 'MARK'.                      "mark all filled lines
+       PERFORM FCODE_TC_MARK_LINES USING P_TC_NAME
+                                         P_TABLE_NAME
+                                         P_MARK_NAME   .
+       CLEAR P_OK.
+
+     WHEN 'DMRK'.                      "demark all filled lines
+       PERFORM FCODE_TC_DEMARK_LINES USING P_TC_NAME
+                                           P_TABLE_NAME
+                                           P_MARK_NAME .
+       CLEAR P_OK.
+
+*     WHEN 'SASCEND'   OR
+*          'SDESCEND'.                  "sort column
+*       PERFORM FCODE_SORT_TC USING P_TC_NAME
+*                                   l_ok.
+
+   ENDCASE.
+
+ ENDFORM.                              " USER_OK_TC
+
+*&---------------------------------------------------------------------*
+*&      Form  FCODE_INSERT_ROW                                         *
+*&---------------------------------------------------------------------*
+ FORM fcode_insert_row
+               USING    P_TC_NAME           TYPE DYNFNAM
+                        P_TABLE_NAME             .
+
+*&SPWIZARD: BEGIN OF LOCAL DATA----------------------------------------*
+   DATA L_LINES_NAME       LIKE FELD-NAME.
+   DATA L_SELLINE          LIKE SY-STEPL.
+   DATA L_LASTLINE         TYPE I.
+   DATA L_LINE             TYPE I.
+   DATA L_TABLE_NAME       LIKE FELD-NAME.
+   FIELD-SYMBOLS <TC>                 TYPE CXTAB_CONTROL.
+   FIELD-SYMBOLS <TABLE>              TYPE STANDARD TABLE.
+   FIELD-SYMBOLS <LINES>              TYPE I.
+*&SPWIZARD: END OF LOCAL DATA------------------------------------------*
+
+   ASSIGN (P_TC_NAME) TO <TC>.
+
+*&SPWIZARD: get the table, which belongs to the tc                     *
+   CONCATENATE P_TABLE_NAME '[]' INTO L_TABLE_NAME. "table body
+   ASSIGN (L_TABLE_NAME) TO <TABLE>.                "not headerline
+
+*&SPWIZARD: get looplines of TableControl                              *
+   CONCATENATE 'G_' P_TC_NAME '_LINES' INTO L_LINES_NAME.
+   ASSIGN (L_LINES_NAME) TO <LINES>.
+
+*&SPWIZARD: get current line                                           *
+   GET CURSOR LINE L_SELLINE.
+   IF SY-SUBRC <> 0.                   " append line to table
+     L_SELLINE = <TC>-LINES + 1.
+*&SPWIZARD: set top line                                               *
+     IF L_SELLINE > <LINES>.
+       <TC>-TOP_LINE = L_SELLINE - <LINES> + 1 .
+     ELSE.
+       <TC>-TOP_LINE = 1.
+     ENDIF.
+   ELSE.                               " insert line into table
+     L_SELLINE = <TC>-TOP_LINE + L_SELLINE - 1.
+     L_LASTLINE = <TC>-TOP_LINE + <LINES> - 1.
+   ENDIF.
+*&SPWIZARD: set new cursor line                                        *
+   L_LINE = L_SELLINE - <TC>-TOP_LINE + 1.
+
+*&SPWIZARD: insert initial line                                        *
+   INSERT INITIAL LINE INTO <TABLE> INDEX L_SELLINE.
+   <TC>-LINES = <TC>-LINES + 1.
+*&SPWIZARD: set cursor                                                 *
+   SET CURSOR LINE L_LINE.
+
+ ENDFORM.                              " FCODE_INSERT_ROW
+
+*&---------------------------------------------------------------------*
+*&      Form  FCODE_DELETE_ROW                                         *
+*&---------------------------------------------------------------------*
+ FORM fcode_delete_row
+               USING    P_TC_NAME           TYPE DYNFNAM
+                        P_TABLE_NAME
+                        P_MARK_NAME   .
+
+*&SPWIZARD: BEGIN OF LOCAL DATA----------------------------------------*
+   DATA L_TABLE_NAME       LIKE FELD-NAME.
+
+   FIELD-SYMBOLS <TC>         TYPE cxtab_control.
+   FIELD-SYMBOLS <TABLE>      TYPE STANDARD TABLE.
+   FIELD-SYMBOLS <WA>.
+   FIELD-SYMBOLS <MARK_FIELD>.
+*&SPWIZARD: END OF LOCAL DATA------------------------------------------*
+
+   ASSIGN (P_TC_NAME) TO <TC>.
+
+*&SPWIZARD: get the table, which belongs to the tc                     *
+   CONCATENATE P_TABLE_NAME '[]' INTO L_TABLE_NAME. "table body
+   ASSIGN (L_TABLE_NAME) TO <TABLE>.                "not headerline
+
+*&SPWIZARD: delete marked lines                                        *
+   DESCRIBE TABLE <TABLE> LINES <TC>-LINES.
+
+   LOOP AT <TABLE> ASSIGNING <WA>.
+
+*&SPWIZARD: access to the component 'FLAG' of the table header         *
+     ASSIGN COMPONENT P_MARK_NAME OF STRUCTURE <WA> TO <MARK_FIELD>.
+
+     IF <MARK_FIELD> = 'X'.
+       DELETE <TABLE> INDEX SYST-TABIX.
+       IF SY-SUBRC = 0.
+         <TC>-LINES = <TC>-LINES - 1.
+       ENDIF.
+     ENDIF.
+   ENDLOOP.
+
+ ENDFORM.                              " FCODE_DELETE_ROW
+
+*&---------------------------------------------------------------------*
+*&      Form  COMPUTE_SCROLLING_IN_TC
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*      -->P_TC_NAME  name of tablecontrol
+*      -->P_OK       ok code
+*----------------------------------------------------------------------*
+ FORM COMPUTE_SCROLLING_IN_TC USING    P_TC_NAME
+                                       P_OK.
+*&SPWIZARD: BEGIN OF LOCAL DATA----------------------------------------*
+   DATA L_TC_NEW_TOP_LINE     TYPE I.
+   DATA L_TC_NAME             LIKE FELD-NAME.
+   DATA L_TC_LINES_NAME       LIKE FELD-NAME.
+   DATA L_TC_FIELD_NAME       LIKE FELD-NAME.
+
+   FIELD-SYMBOLS <TC>         TYPE cxtab_control.
+   FIELD-SYMBOLS <LINES>      TYPE I.
+*&SPWIZARD: END OF LOCAL DATA------------------------------------------*
+
+   ASSIGN (P_TC_NAME) TO <TC>.
+*&SPWIZARD: get looplines of TableControl                              *
+   CONCATENATE 'G_' P_TC_NAME '_LINES' INTO L_TC_LINES_NAME.
+   ASSIGN (L_TC_LINES_NAME) TO <LINES>.
+
+
+*&SPWIZARD: is no line filled?                                         *
+   IF <TC>-LINES = 0.
+*&SPWIZARD: yes, ...                                                   *
+     L_TC_NEW_TOP_LINE = 1.
+   ELSE.
+*&SPWIZARD: no, ...                                                    *
+     CALL FUNCTION 'SCROLLING_IN_TABLE'
+          EXPORTING
+               ENTRY_ACT             = <TC>-TOP_LINE
+               ENTRY_FROM            = 1
+               ENTRY_TO              = <TC>-LINES
+               LAST_PAGE_FULL        = 'X'
+               LOOPS                 = <LINES>
+               OK_CODE               = P_OK
+               OVERLAPPING           = 'X'
+          IMPORTING
+               ENTRY_NEW             = L_TC_NEW_TOP_LINE
+          EXCEPTIONS
+*              NO_ENTRY_OR_PAGE_ACT  = 01
+*              NO_ENTRY_TO           = 02
+*              NO_OK_CODE_OR_PAGE_GO = 03
+               OTHERS                = 0.
+   ENDIF.
+
+*&SPWIZARD: get actual tc and column                                   *
+   GET CURSOR FIELD L_TC_FIELD_NAME
+              AREA  L_TC_NAME.
+
+   IF SYST-SUBRC = 0.
+     IF L_TC_NAME = P_TC_NAME.
+*&SPWIZARD: et actual column                                           *
+       SET CURSOR FIELD L_TC_FIELD_NAME LINE 1.
+     ENDIF.
+   ENDIF.
+
+*&SPWIZARD: set the new top line                                       *
+   <TC>-TOP_LINE = L_TC_NEW_TOP_LINE.
+
+
+ ENDFORM.                              " COMPUTE_SCROLLING_IN_TC
+
+*&---------------------------------------------------------------------*
+*&      Form  FCODE_TC_MARK_LINES
+*&---------------------------------------------------------------------*
+*       marks all TableControl lines
+*----------------------------------------------------------------------*
+*      -->P_TC_NAME  name of tablecontrol
+*----------------------------------------------------------------------*
+FORM FCODE_TC_MARK_LINES USING P_TC_NAME
+                               P_TABLE_NAME
+                               P_MARK_NAME.
+*&SPWIZARD: EGIN OF LOCAL DATA-----------------------------------------*
+  DATA L_TABLE_NAME       LIKE FELD-NAME.
+
+  FIELD-SYMBOLS <TC>         TYPE cxtab_control.
+  FIELD-SYMBOLS <TABLE>      TYPE STANDARD TABLE.
+  FIELD-SYMBOLS <WA>.
+  FIELD-SYMBOLS <MARK_FIELD>.
+*&SPWIZARD: END OF LOCAL DATA------------------------------------------*
+
+  ASSIGN (P_TC_NAME) TO <TC>.
+
+*&SPWIZARD: get the table, which belongs to the tc                     *
+   CONCATENATE P_TABLE_NAME '[]' INTO L_TABLE_NAME. "table body
+   ASSIGN (L_TABLE_NAME) TO <TABLE>.                "not headerline
+
+*&SPWIZARD: mark all filled lines                                      *
+  LOOP AT <TABLE> ASSIGNING <WA>.
+
+*&SPWIZARD: access to the component 'FLAG' of the table header         *
+     ASSIGN COMPONENT P_MARK_NAME OF STRUCTURE <WA> TO <MARK_FIELD>.
+
+     <MARK_FIELD> = 'X'.
+  ENDLOOP.
+ENDFORM.                                          "fcode_tc_mark_lines
+
+*&---------------------------------------------------------------------*
+*&      Form  FCODE_TC_DEMARK_LINES
+*&---------------------------------------------------------------------*
+*       demarks all TableControl lines
+*----------------------------------------------------------------------*
+*      -->P_TC_NAME  name of tablecontrol
+*----------------------------------------------------------------------*
+FORM FCODE_TC_DEMARK_LINES USING P_TC_NAME
+                                 P_TABLE_NAME
+                                 P_MARK_NAME .
+*&SPWIZARD: BEGIN OF LOCAL DATA----------------------------------------*
+  DATA L_TABLE_NAME       LIKE FELD-NAME.
+
+  FIELD-SYMBOLS <TC>         TYPE cxtab_control.
+  FIELD-SYMBOLS <TABLE>      TYPE STANDARD TABLE.
+  FIELD-SYMBOLS <WA>.
+  FIELD-SYMBOLS <MARK_FIELD>.
+*&SPWIZARD: END OF LOCAL DATA------------------------------------------*
+
+  ASSIGN (P_TC_NAME) TO <TC>.
+
+*&SPWIZARD: get the table, which belongs to the tc                     *
+   CONCATENATE P_TABLE_NAME '[]' INTO L_TABLE_NAME. "table body
+   ASSIGN (L_TABLE_NAME) TO <TABLE>.                "not headerline
+
+*&SPWIZARD: demark all filled lines                                    *
+  LOOP AT <TABLE> ASSIGNING <WA>.
+
+*&SPWIZARD: access to the component 'FLAG' of the table header         *
+     ASSIGN COMPONENT P_MARK_NAME OF STRUCTURE <WA> TO <MARK_FIELD>.
+
+     <MARK_FIELD> = SPACE.
+  ENDLOOP.
+ENDFORM.                                          "fcode_tc_mark_lines
